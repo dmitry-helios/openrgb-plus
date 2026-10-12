@@ -27,6 +27,8 @@ Both identically named RAM sticks get distinct IDs using their hardware metadata
 
 Selecting a color normally switches to Direct, Static, or Custom mode. Supply both `effect` and `rgb_color` to color a supported hardware effect. Brightness is native when the mode supports it; otherwise RGB values are scaled. Modes without color or brightness support expose only the controls they support. Off uses the hardware Off mode when available, otherwise black in a color-capable mode. RGB/brightness state represents the first non-black LED for multi-color devices.
 
+Since 0.1.1, selecting a color-capable hardware effect (for example Direct → Breathing) carries over the current color and brightness rather than restoring that effect's old palette. Explicit color/brightness values still take precedence. Effects such as Rainbow that generate their own colors keep their normal behavior. Multi-color layouts use the first non-black LED as the representative color.
+
 On SDK v6, the profile selector polls and displays the **active profile reported by the server**. On SDK v3–v5, it can only report the last profile requested by Home Assistant; that fallback selection resets on reconnection and after a light/effect command, and changes made in OpenRGB may not be reflected.
 
 ### Effects plugin

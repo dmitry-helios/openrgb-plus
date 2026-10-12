@@ -394,6 +394,27 @@ class Client:
         if not 0 <= index < len(dev.modes):
             raise ValueError("Device has no controllable mode")
         mode = replace(dev.modes[index], colors=list(dev.modes[index].colors))
+        if effect is not None and effect != "Off" and rgb is None and mode.flags & 96:
+            # Hardware modes remember their own palettes. Carry the CURRENT
+            # color into a newly selected color-capable mode instead of reviving
+            # that mode's previous palette. Read from the fresh SDK snapshot.
+            previous = dev.mode
+            source = previous.colors if previous and previous.color_mode == 2 else dev.colors
+            current = next((c for c in source if any(c)), None)
+            if current is not None:
+                if previous and previous.flags & 16:
+                    rgb = current
+                    span = previous.brightness_max - previous.brightness_min
+                    level = (
+                        round(255 * (previous.brightness - previous.brightness_min) / span)
+                        if span
+                        else 255
+                    )
+                else:
+                    level = max(current)
+                    rgb = tuple(round(c * 255 / level) for c in current)
+                if brightness is None:
+                    brightness = max(0, min(255, level))
         if brightness is not None and not 0 <= brightness <= 255:
             raise ValueError("Brightness must be between 0 and 255")
         if rgb is not None and (len(rgb) != 3 or any(not 0 <= c <= 255 for c in rgb)):

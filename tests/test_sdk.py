@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 import struct
 import sys
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -14,6 +15,96 @@ spec = importlib.util.spec_from_file_location(
 sdk = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = sdk
 spec.loader.exec_module(sdk)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_native", [False, True])
+@pytest.mark.parametrize("source_palette", [False, True])
+@pytest.mark.parametrize("target_native", [False, True])
+async def test_effect_change_retains_current_color_and_brightness(
+    source_native, source_palette, target_native
+):
+    source_color = (255, 0, 0) if source_native else (128, 0, 0)
+    previous = sdk.Mode(
+        "Direct",
+        0,
+        32 | (16 if source_native else 0),
+        0,
+        0,
+        0,
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        2 if source_palette else 1,
+        [source_color],
+    )
+    target = sdk.Mode(
+        "Breathing",
+        1,
+        64 | (16 if target_native else 0),
+        0,
+        0,
+        0,
+        255,
+        1,
+        1,
+        0,
+        255,
+        0,
+        2,
+        [(0, 255, 0)],
+    )
+    dev = sdk.Device(42, "Test", "", "", "", "", "", [previous, target], 0, [source_color], "test")
+    client = sdk.Client("unused")
+    client.read_devices = AsyncMock(return_value={"test": dev})
+    client.mode = AsyncMock()
+    await client.light("test", True, effect="Breathing")
+    selected = client.mode.await_args.args[2]
+    assert selected.colors == [(255, 0, 0) if target_native else (128, 0, 0)]
+    if target_native:
+        assert selected.brightness == 128
+    assert target.colors == [(0, 255, 0)]  # No mutation of cached mode data.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "effect,rgb,brightness,expected",
+    [
+        ("Breathing", (0, 0, 255), 255, [(0, 0, 255)]),
+        ("Breathing", None, 64, [(64, 0, 0)]),
+        ("Rainbow", None, None, [(0, 255, 0)]),
+        ("Off", None, None, [(0, 255, 0)]),
+    ],
+)
+async def test_effect_change_respects_explicit_overrides_and_generated_colors(
+    effect, rgb, brightness, expected
+):
+    previous = sdk.Mode("Direct", 0, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, [])
+    target = sdk.Mode(
+        effect,
+        1,
+        64 if effect != "Rainbow" else 128,
+        0,
+        0,
+        0,
+        255,
+        1,
+        1,
+        0,
+        255,
+        0,
+        2,
+        [(0, 255, 0)],
+    )
+    dev = sdk.Device(42, "Test", "", "", "", "", "", [previous, target], 0, [(128, 0, 0)], "test")
+    client = sdk.Client("unused")
+    client.read_devices = AsyncMock(return_value={"test": dev})
+    client.mode = AsyncMock()
+    await client.light("test", True, effect=effect, rgb=rgb, brightness=brightness)
+    assert client.mode.await_args.args[2].colors == expected
 
 
 def fixture(protocol=5, location="RAM slot 1", device_type=999):
