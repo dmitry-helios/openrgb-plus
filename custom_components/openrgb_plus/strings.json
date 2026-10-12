@@ -1,0 +1,9 @@
+{
+  "title": "OpenRGB Plus",
+  "config": {
+    "step": {"user": {"title": "Connect to OpenRGB", "description": "Enable the SDK server in OpenRGB. Enter the computer's LAN address, not 0.0.0.0 or Home Assistant's address.", "data": {"name": "Name", "host": "Host", "port": "Port"}}},
+    "error": {"cannot_connect": "Unable to connect or read devices. Check the SDK server, address, port and firewall.", "unsupported_protocol": "Unsupported or malformed SDK response. OpenRGB SDK protocol 3 or later is required."},
+    "abort": {"already_configured": "This server is already configured"}
+  },
+  "options": {"step": {"init": {"title": "OpenRGB options", "data": {"scan_interval": "Polling interval (seconds)", "effects_plugin": "Discover Effects plugin switches"}}}}
+}
