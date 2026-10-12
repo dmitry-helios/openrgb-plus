@@ -109,6 +109,8 @@ class OpenRGBLight(ServerEntity, LightEntity):
         rgb = kwargs.get("rgb_color")
         brightness = kwargs.get("brightness")
         effect = kwargs.get("effect")
+        if rgb is not None and brightness is None:
+            brightness = self.brightness or self._last_brightness
         if effect is None and rgb is None and self.color_mode == ColorMode.RGB:
             rgb = self.rgb_color
             if brightness is None:

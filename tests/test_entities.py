@@ -60,3 +60,27 @@ async def test_profiles_and_plugin_switch():
     c.command.assert_awaited_with("effect", "Rainbow", False)
     c.data.effects.clear()
     assert not effect.available
+
+
+@pytest.mark.asyncio
+async def test_native_brightness_color_turns_back_on():
+    c = coordinator()
+    dev = c.data.devices["ram"]
+    dev.mode.flags |= 16
+    dev.mode.brightness_min, dev.mode.brightness_max = 0, 255
+    dev.mode.brightness = 0
+    dev.colors = [(0, 0, 0)]
+    light = OpenRGBLight(c, "ram")
+    await light.async_turn_on(rgb_color=(255, 0, 0))
+    c.command.assert_awaited_with(
+        "light", "ram", True, rgb=(255, 0, 0), brightness=255, effect=None
+    )
+
+
+def test_native_profile_state_is_polled():
+    c = coordinator()
+    c.client.protocol = 6
+    c.data.active_profile = "Example Green"
+    select = ProfileSelect(c)
+    assert select.current_option == "Example Green"
+    assert select.extra_state_attributes["state_source"] == "server"

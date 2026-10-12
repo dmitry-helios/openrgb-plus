@@ -247,6 +247,8 @@ class Client:
                     raise ProtocolError("Invalid SDK header or excessive packet length")
                 data = await self.reader.readexactly(size)
                 if response == 10:
+                    if len(data) != 8:
+                        raise ProtocolError("Invalid SDK acknowledgement length")
                     acknowledged, status = struct.unpack("<II", data)
                     if acknowledged == packet and response_device == device:
                         if status:

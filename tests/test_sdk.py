@@ -193,3 +193,24 @@ async def test_unknown_profile_rejected_without_write():
     client = sdk.Client("unused")
     with pytest.raises(ValueError, match="Unknown"):
         await client.profile("not saved")
+
+
+@pytest.mark.asyncio
+async def test_native_ack_failure_is_reported():
+    async def reject(reader, writer):
+        _, device, packet, size = sdk.HEADER.unpack(await reader.readexactly(16))
+        await reader.readexactly(size)
+        writer.write(sdk.HEADER.pack(b"ORGB", device, 10, 8) + struct.pack("<II", packet, 4))
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(reject, "127.0.0.1", 0)
+    c = sdk.Client("127.0.0.1", server.sockets[0].getsockname()[1])
+    async with server:
+        c.reader, c.writer = await asyncio.open_connection(c.host, c.port)
+        try:
+            with pytest.raises(sdk.ProtocolError, match="status 4"):
+                await c.command(1050, 99, b"test")
+        finally:
+            await c.close()

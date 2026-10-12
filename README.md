@@ -27,13 +27,15 @@ Both identically named RAM sticks get distinct IDs using their hardware metadata
 
 Selecting a color normally switches to Direct, Static, or Custom mode. Supply both `effect` and `rgb_color` to color a supported hardware effect. Brightness is native when the mode supports it; otherwise RGB values are scaled. Modes without color or brightness support expose only the controls they support. Off uses the hardware Off mode when available, otherwise black in a color-capable mode. RGB/brightness state represents the first non-black LED for multi-color devices.
 
-On SDK v3–v5, the profile selector reports **the last profile requested by Home Assistant**. On SDK v3–v5, the active profile cannot be queried. On SDK v6, the selector polls and displays the actual active profile reported by the server. The selection resets on reconnection and when this integration sends a light/effect command; changes made in OpenRGB may not be reflected in the selector.
+On SDK v6, the profile selector polls and displays the **active profile reported by the server**. On SDK v3–v5, it can only report the last profile requested by Home Assistant; that fallback selection resets on reconnection and after a light/effect command, and changes made in OpenRGB may not be reflected.
 
 ### Effects plugin
 
 Install a compatible [OpenRGB Effects plugin](https://openrgb.org/plugins), create effects, and assign devices/zones in OpenRGB first. This integration discovers Effects SDK versions 1 and 2, then exposes one switch per advertised effect name. The plugin API addresses effects by name, so duplicate names cannot be controlled independently. It does not create effects or edit their internal parameters.
 
 Hardware modes and plugin effects are different: a running plugin can continually overwrite manual colors and hardware modes. Stop the relevant plugin effect before setting a static color. Plugin discovery is optional; if the server does not respond, lights and profiles still work and discovery retries after 60 seconds. You can disable it in the integration's **Configure** options. Unknown plugin protocol versions are not controlled.
+
+If OpenRGB's GUI connects as an **SDK client** to a background system service, plugins loaded only in the GUI may not be accessible through the service's SDK endpoint. The release 1.0 server sends no plugin-list response when it has no plugin manager. In that arrangement, use an SDK server hosted by the plugin-bearing OpenRGB instance (a different port if the service occupies 6742), then configure the integration for that endpoint. Do not assume that an Effects tab in a connected GUI means its background service exposes the plugin API.
 
 ## Automation examples
 
