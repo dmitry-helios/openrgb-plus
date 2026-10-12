@@ -235,7 +235,12 @@ class Client:
 
     async def request(self, packet: int, device: int = 0, payload: bytes = b"") -> bytes:
         await self.send(packet, device, payload)
-        return await self.receive(packet, device)
+        data = await self.receive(packet, device)
+        if self.protocol >= 6 and packet != 40:
+            # Drain this request's acknowledgement before another command with
+            # the same packet ID (notably plugin discovery/toggle, both 201).
+            await self.receive(packet, device, ack=True)
+        return data
 
     async def receive(self, packet: int, device: int, ack: bool = False) -> bytes:
         async with asyncio.timeout(self.timeout):

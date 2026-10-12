@@ -69,16 +69,18 @@ def test_mode_wire_roundtrip():
 
 
 class FakeServer:
-    def __init__(self, plugin=True, version=2, protocol=5):
+    def __init__(self, plugin=True, version=2, protocol=5, reject_effect=False):
         self.packets = []
         self.plugin = plugin
         self.version = version
         self.protocol = protocol
+        self.reject_effect = reject_effect
 
     async def handle(self, reader, writer):
         try:
             while True:
                 magic, device, packet, size = sdk.HEADER.unpack(await reader.readexactly(16))
+                request_device = device
                 data = await reader.readexactly(size)
                 assert magic == b"ORGB"
                 self.packets.append((packet, device, data))
@@ -124,8 +126,16 @@ class FakeServer:
                     writer.write(raw[7:])
                     await writer.drain()
                 if self.protocol >= 6:
+                    status = (
+                        4
+                        if self.reject_effect
+                        and packet == 201
+                        and data[:4] == struct.pack("<I", 21)
+                        else 0
+                    )
                     writer.write(
-                        sdk.HEADER.pack(b"ORGB", device, 10, 8) + struct.pack("<II", packet, 0)
+                        sdk.HEADER.pack(b"ORGB", request_device, 10, 8)
+                        + struct.pack("<II", packet, status)
                     )
                     await writer.drain()
         except (asyncio.IncompleteReadError, ConnectionError):
@@ -212,5 +222,19 @@ async def test_native_ack_failure_is_reported():
         try:
             with pytest.raises(sdk.ProtocolError, match="status 4"):
                 await c.command(1050, 99, b"test")
+        finally:
+            await c.close()
+
+
+@pytest.mark.asyncio
+async def test_plugin_discovery_ack_cannot_mask_toggle_rejection():
+    fake = FakeServer(protocol=6, reject_effect=True)
+    server = await asyncio.start_server(fake.handle, "127.0.0.1", 0)
+    c = sdk.Client("127.0.0.1", server.sockets[0].getsockname()[1])
+    async with server:
+        try:
+            await c.snapshot()
+            with pytest.raises(sdk.ProtocolError, match="status 4"):
+                await c.effect("Rainbow", False)
         finally:
             await c.close()
