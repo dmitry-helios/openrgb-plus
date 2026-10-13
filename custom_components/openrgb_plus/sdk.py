@@ -8,7 +8,7 @@ All public operations are serialized by the Home Assistant coordinator.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import hashlib
 import logging
 import struct
@@ -119,6 +119,24 @@ def pack_colors(colors: list[tuple[int, int, int]]) -> bytes:
 
 
 @dataclass
+class Zone:
+    index: int
+    name: str
+    led_count: int
+    offset: int
+    flags: int = 0
+    modes: list[Mode] = field(default_factory=list)
+    active_mode: int = 0
+    key: str = ""
+
+    @property
+    def color_count(self) -> int:
+        # Effects-only sizing describes a virtual strip on one physical RGB
+        # output. It occupies ONE entry in the device's flat color buffer.
+        return min(self.led_count, 1) if self.flags & 1 else self.led_count
+
+
+@dataclass
 class Device:
     index: int
     name: str
@@ -131,6 +149,7 @@ class Device:
     active_mode: int
     colors: list[tuple[int, int, int]]
     key: str = ""
+    zones: list[Zone] = field(default_factory=list)
 
     @property
     def mode(self) -> Mode | None:
@@ -143,9 +162,13 @@ def parse_device(data: bytes, index: int, protocol: int) -> Device:
     name, vendor, description, version, serial, location = (r.string() for _ in range(6))
     count, active = r.number("H"), r.number()
     modes = [Mode.read(r, protocol) for _ in range(count)]
-    for _ in range(r.number("H")):
-        r.string()
-        r.take(16)  # Type, minimum, maximum, LED count.
+    zones = []
+    offset = 0
+    occurrences: dict[str, int] = {}
+    for zone_index in range(r.number("H")):
+        zone_name = r.string()
+        r.take(12)  # Type, minimum, maximum.
+        led_count = r.number()
         r.take(r.number("H"))  # Optional matrix.
         if protocol >= 4:
             for _ in range(r.number("H")):
@@ -154,18 +177,36 @@ def parse_device(data: bytes, index: int, protocol: int) -> Device:
                 if protocol >= 6:
                     r.take(r.number("H"))
                     r.number()
-        if protocol >= 5:
-            r.number()  # Zone flags.
+        flags = r.number() if protocol >= 5 else 0
+        zone_modes = []
+        zone_active = 0
+        display_name = ""
         if protocol >= 6:
-            r.number()  # Zone active mode.
-            for _ in range(r.number("H")):
-                Mode.read(r, protocol)
-            r.string()  # Zone display name.
+            zone_active = r.number()
+            zone_modes = [Mode.read(r, protocol) for _ in range(r.number("H"))]
+            display_name = r.string()
+        base = hashlib.sha256(zone_name.encode()).hexdigest()[:16]
+        occurrence = occurrences.get(base, 0)
+        occurrences[base] = occurrence + 1
+        zone = Zone(
+            zone_index,
+            display_name or zone_name,
+            led_count,
+            offset,
+            flags,
+            zone_modes,
+            zone_active,
+            f"{base}_{occurrence}",
+        )
+        zones.append(zone)
+        offset += zone.color_count
     for _ in range(r.number("H")):
         r.string()
         if protocol < 6:
             r.number()
     colors = r.colors()
+    if offset > len(colors):
+        raise ProtocolError("Zone color ranges exceed the controller color buffer")
     if protocol >= 5:
         for _ in range(r.number("H")):
             r.string()
@@ -177,7 +218,18 @@ def parse_device(data: bytes, index: int, protocol: int) -> Device:
     identity = "\0".join((name, vendor, serial, location))
     key = hashlib.sha256(identity.encode()).hexdigest()[:24]
     return Device(
-        index, name, vendor, description, version, serial, location, modes, active, colors, key
+        index,
+        name,
+        vendor,
+        description,
+        version,
+        serial,
+        location,
+        modes,
+        active,
+        colors,
+        key,
+        zones,
     )
 
 
@@ -360,6 +412,31 @@ class Client:
 
     async def color(self, dev: Device, colors: list[tuple[int, int, int]]) -> None:
         await self.command(1050, dev.index, block(pack_colors(colors)))
+
+    async def zone_light(
+        self, key: str, zone_key: str, on: bool, rgb=(255, 255, 255), brightness=255
+    ) -> None:
+        dev = (await self.read_devices()).get(key)
+        zone = next((z for z in dev.zones if z.key == zone_key), None) if dev else None
+        if zone is None or not zone.color_count:
+            raise ValueError("Zone is no longer connected or has no configured LEDs")
+        mode = (
+            (zone.modes[zone.active_mode] if 0 <= zone.active_mode < len(zone.modes) else None)
+            if zone.modes
+            else dev.mode
+        )
+        if mode is None or mode.color_mode != 1 or not mode.flags & 32:
+            raise ValueError(
+                "Select Direct or another per-LED color mode in OpenRGB or on the whole-device light before controlling this zone"
+            )
+        if len(rgb) != 3 or any(not 0 <= c <= 255 for c in rgb) or not 0 <= brightness <= 255:
+            raise ValueError("RGB and brightness values must be between 0 and 255")
+        color = tuple(round(c * brightness / 255) for c in rgb) if on else (0, 0, 0)
+        await self.command(
+            1051,
+            dev.index,
+            block(struct.pack("<I", zone.index) + pack_colors([color] * zone.color_count)),
+        )
 
     async def light(self, key: str, on: bool, rgb=None, brightness=None, effect=None) -> None:
         # Refresh first so writes never deliberately use stale controller indexes.

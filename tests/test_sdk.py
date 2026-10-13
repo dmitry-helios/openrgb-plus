@@ -17,6 +17,52 @@ sys.modules[spec.name] = sdk
 spec.loader.exec_module(sdk)
 
 
+@pytest.mark.parametrize("protocol", [5, 6])
+def test_zone_offsets_include_virtual_size_and_empty_zones(protocol):
+    dev = sdk.parse_device(
+        fixture(protocol, zone_layout=[("RGB", 100, 1), ("Empty", 0, 0), ("Strip", 3, 0)]),
+        42,
+        protocol,
+    )
+    assert [(z.offset, z.color_count) for z in dev.zones] == [(0, 1), (1, 0), (1, 3)]
+    assert len(dev.colors) == 4
+    resized = sdk.parse_device(
+        fixture(protocol, zone_layout=[("RGB", 200, 1), ("Empty", 0, 0), ("Strip", 5, 0)]),
+        99,
+        protocol,
+    )
+    assert [z.key for z in dev.zones] == [z.key for z in resized.zones]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("on", [True, False])
+async def test_zone_command_only_writes_target_zone(on):
+    dev = sdk.parse_device(fixture(6, zone_layout=[("A", 2, 0), ("B", 3, 0)]), 99, 6)
+    client = sdk.Client("unused")
+    client.read_devices = AsyncMock(return_value={dev.key: dev})
+    client.command = AsyncMock()
+    await client.zone_light(dev.key, dev.zones[1].key, on, (255, 0, 0), 128)
+    colors = [(128, 0, 0) if on else (0, 0, 0)] * 3
+    client.command.assert_awaited_once_with(
+        1051, 99, sdk.block(struct.pack("<I", 1) + sdk.pack_colors(colors))
+    )
+    assert dev.colors == [(0, 255, 0)] * 5
+
+
+@pytest.mark.asyncio
+async def test_zone_rejects_shared_effect_without_changing_mode():
+    dev = sdk.parse_device(fixture(5), 42, 5)
+    dev.mode.color_mode = 2
+    client = sdk.Client("unused")
+    client.read_devices = AsyncMock(return_value={dev.key: dev})
+    client.command = AsyncMock()
+    with pytest.raises(ValueError, match="per-LED"):
+        await client.zone_light(dev.key, dev.zones[0].key, False)
+    client.command.assert_not_awaited()
+    with pytest.raises(ValueError, match="no longer connected"):
+        await client.zone_light(dev.key, "removed-zone", True)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source_native", [False, True])
 @pytest.mark.parametrize("source_palette", [False, True])
@@ -107,26 +153,31 @@ async def test_effect_change_respects_explicit_overrides_and_generated_colors(
     assert client.mode.await_args.args[2].colors == expected
 
 
-def fixture(protocol=5, location="RAM slot 1", device_type=999):
+def fixture(protocol=5, location="RAM slot 1", device_type=999, zone_layout=None):
     mode = sdk.Mode("Direct", 7, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, [])
     raw = struct.pack("<I", device_type)
     raw += b"".join(
         sdk.string(s) for s in ("Test RAM", "Test Vendor", "Memory", "1.0", "", location)
     )
     raw += struct.pack("<HI", 1, 0) + mode.pack(protocol)
-    raw += struct.pack("<H", 1) + sdk.string("Zone") + struct.pack("<4IH", 999, 1, 8, 2, 0)
-    if protocol >= 4:
-        raw += struct.pack("<H", 1) + sdk.string("Segment") + struct.pack("<3I", 999, 0, 2)
+    zone_layout = zone_layout or [("Zone", 2, 0)]
+    raw += struct.pack("<H", len(zone_layout))
+    color_count = 0
+    for name, count, flags in zone_layout:
+        color_count += min(count, 1) if flags & 1 else count
+        raw += sdk.string(name) + struct.pack("<4IH", 999, 0, 200, count, 0)
+        if protocol >= 4:
+            raw += struct.pack("<H", 1) + sdk.string("Segment") + struct.pack("<3I", 999, 0, count)
+            if protocol >= 6:
+                raw += struct.pack("<HI", 0, 0)
+        if protocol >= 5:
+            raw += struct.pack("<I", flags)
         if protocol >= 6:
-            raw += struct.pack("<HI", 0, 0)
-    if protocol >= 5:
-        raw += struct.pack("<I", 1)
-    if protocol >= 6:
-        raw += struct.pack("<IH", 0, 1) + mode.pack(protocol) + sdk.string("Display zone")
-    raw += struct.pack("<H", 2)
-    raw += sdk.string("LED 1") + (struct.pack("<I", 0) if protocol < 6 else b"")
-    raw += sdk.string("LED 2") + (struct.pack("<I", 1) if protocol < 6 else b"")
-    raw += sdk.pack_colors([(0, 255, 0), (0, 255, 0)])
+            raw += struct.pack("<IH", 0, 1) + mode.pack(protocol) + sdk.string("")
+    raw += struct.pack("<H", color_count)
+    for i in range(color_count):
+        raw += sdk.string(f"LED {i}") + (struct.pack("<I", i) if protocol < 6 else b"")
+    raw += sdk.pack_colors([(0, 255, 0)] * color_count)
     if protocol >= 5:
         raw += struct.pack("<H", 1) + sdk.string("Alt LED") + struct.pack("<I", 3)
     if protocol >= 6:

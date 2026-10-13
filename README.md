@@ -20,10 +20,19 @@ Disable the built-in OpenRGB integration if it is also controlling these devices
 | Entity | What it controls |
 | --- | --- |
 | Light for each controller | On/off, RGB color, brightness where the active mode supports it, and the hardware modes advertised by that controller |
+| Light for each populated zone | Independent RGB color, software brightness, and on/off, grouped under the same physical device |
 | Profile selector on the server | Loads an existing saved OpenRGB profile and reapplies its controller modes and LED colors |
 | Optional Effects switches | Starts/stops effects already configured in the OpenRGB Effects plugin |
 
 Both identically named RAM sticks get distinct IDs using their hardware metadata/location. If devices expose identical metadata, an occurrence suffix distinguishes them; their assignment can change when identical devices are reordered. You can rename entities in Home Assistant.
+
+### Zone lights (0.2.0)
+
+Populated OpenRGB zones are discovered automatically as additional HA lights, named after the zones shown in OpenRGB. Existing whole-device entity IDs stay unchanged. Zone lights support dashboards, groups, scenes, and standard `light.turn_on`/`light.turn_off` actions. Whole-device commands and profiles still affect all zones.
+
+Select **Direct** (or another mode using per-LED colors) on the whole-device light before controlling zones. A zone command sends only that zone's colors; it does not change a shared hardware mode or shared hardware brightness. If the active device/zone mode does not accept per-LED colors, the command returns an explanatory error. Hardware effects remain on the whole-device lights; zone effect selection is not exposed in this release. Running plugin effects can overwrite zone colors.
+
+Zone brightness scales its RGB values. Shared hardware brightness remains a master multiplier, so set the device brightness to maximum for the full zone range. Off sets only that zone to black; on restores its last color/brightness held during the current HA session. Multi-color zones report their first non-black LED. Zones with zero configured LEDs appear once configured in OpenRGB. Non-addressable RGB headers with virtual effect lengths occupy one physical color slot and are handled accordingly. Zone IDs use the original zone name and an occurrence suffix; resizing or changing its display name keeps the ID, while reordering otherwise identical duplicate names can change their assignment.
 
 Selecting a color normally switches to Direct, Static, or Custom mode. Supply both `effect` and `rgb_color` to color a supported hardware effect. Brightness is native when the mode supports it; otherwise RGB values are scaled. Modes without color or brightness support expose only the controls they support. Off uses the hardware Off mode when available, otherwise black in a color-capable mode. RGB/brightness state represents the first non-black LED for multi-color devices.
 
@@ -73,7 +82,7 @@ Polling defaults to 10 seconds, configurable from 5 to 300 seconds. Disconnected
 
 The [official integration](https://github.com/home-assistant/core/tree/dev/homeassistant/components/openrgb) currently uses `openrgb-python==0.3.8`, whose upstream client negotiates SDK v4. Its light implementation does not provide profile selectors or Effects plugin switches. Forking just the entity layer would retain that protocol dependency.
 
-OpenRGB Plus is a separate implementation with a small asynchronous SDK client, bounded packet parsing, serialized commands, connection timeouts and no external Python dependencies. It negotiates **SDK v6**, supports v3–v6 controller layouts, and preserves unknown hardware/zone type values rather than rejecting new types. Protocol v6 uses stable controller IDs and waits for command acknowledgements, surfacing server rejections. Per-zone modes are parsed, but this release exposes whole-device control only. Remote settings are not exposed. Supporting a protocol version is not a guarantee that every controller or downstream build behaves identically.
+OpenRGB Plus is a separate implementation with a small asynchronous SDK client, bounded packet parsing, serialized commands, connection timeouts and no external Python dependencies. It negotiates **SDK v6**, supports v3–v6 controller layouts, and preserves unknown hardware/zone type values rather than rejecting new types. Protocol v6 uses stable controller IDs and waits for command acknowledgements, surfacing server rejections. Per-zone modes are parsed; zone color control is available in per-LED modes, while effect selection remains at whole-device level. Remote settings are not exposed. Supporting a protocol version is not a guarantee that every controller or downstream build behaves identically.
 
 Sources consulted:
 

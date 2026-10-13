@@ -13,3 +13,10 @@ See the Tests workflow for protocol and Home Assistant entity checks. The SDK te
 - An initial protocol 5 attempt could discover these devices but writes did not apply correctly. Inspection of the released server's queued controller-command path indicated an ID/index compatibility issue. Native protocol 6 addresses controllers by ID and resolves this in the live test. The old Home Assistant integration was disabled during final testing.
 - No deployment into the user's Home Assistant instance has been performed.
 
+## Zone lights (0.2.0)
+
+- Parsed live zone descriptions and physical color ranges successfully.
+- Verified a zone-specific color, dimming and off operation on a multi-zone controller. SDK reads confirmed sibling colors and the shared mode were unchanged. Restored the original zone color and verified the complete color buffer afterward.
+- Added tests for virtual-sized RGB outputs, empty zones, stable identity across resizing, zone-only command payloads, rejection of incompatible shared modes, and HA entity grouping/discovery.
+- Zone writes use the SDK zone-color packet; physical hardware may still couple outputs. Independent zone effect selection is not exposed.
+

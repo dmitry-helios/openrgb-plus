@@ -10,6 +10,22 @@ PARALLEL_UPDATES = 0
 
 async def async_setup_entry(hass, entry, async_add_entities):
     discover(entry.runtime_data, entry, async_add_entities, "devices", OpenRGBLight)
+    coordinator = entry.runtime_data
+    known = set()
+
+    def update_zones():
+        entities = []
+        for key, dev in coordinator.data.devices.items():
+            for zone in dev.zones:
+                identity = (key, zone.key)
+                if zone.color_count and identity not in known:
+                    known.add(identity)
+                    entities.append(OpenRGBZoneLight(coordinator, key, zone.key))
+        if entities:
+            async_add_entities(entities)
+
+    update_zones()
+    entry.async_on_unload(coordinator.async_add_listener(update_zones))
 
 
 class OpenRGBLight(ServerEntity, LightEntity):
@@ -126,3 +142,81 @@ class OpenRGBLight(ServerEntity, LightEntity):
     async def async_turn_off(self, **kwargs):
         _ = self.rgb_color, self.brightness
         await self.coordinator.command("light", self.key, False)
+
+
+class OpenRGBZoneLight(ServerEntity, LightEntity):
+    """An RGB zone belonging to the existing physical HA device."""
+
+    _attr_supported_color_modes = {ColorMode.RGB}
+    _attr_color_mode = ColorMode.RGB
+
+    def __init__(self, coordinator, key, zone_key):
+        super().__init__(coordinator, f"{key}_zone_{zone_key}")
+        self.key, self.zone_key = key, zone_key
+        self._last_rgb, self._last_brightness = (255, 255, 255), 255
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"{coordinator.entry.entry_id}_{key}")}
+        )
+
+    @property
+    def device(self):
+        return self.coordinator.data.devices.get(self.key)
+
+    @property
+    def zone(self):
+        return (
+            next((z for z in self.device.zones if z.key == self.zone_key), None)
+            if self.device
+            else None
+        )
+
+    @property
+    def name(self):
+        return self.zone.name if self.zone else "Zone"
+
+    @property
+    def available(self):
+        return super().available and self.zone is not None and self.zone.color_count > 0
+
+    def _color(self):
+        if not self.zone:
+            return (0, 0, 0)
+        colors = self.device.colors[self.zone.offset : self.zone.offset + self.zone.color_count]
+        return next((c for c in colors if any(c)), (0, 0, 0))
+
+    @property
+    def is_on(self):
+        mode = self.device.mode if self.device else None
+        if self.zone and self.zone.modes:
+            mode = (
+                self.zone.modes[self.zone.active_mode]
+                if 0 <= self.zone.active_mode < len(self.zone.modes)
+                else None
+            )
+        return bool(any(self._color())) and not (mode and mode.name == "Off")
+
+    @property
+    def rgb_color(self):
+        color = self._color()
+        peak = max(color)
+        if peak:
+            self._last_rgb = tuple(round(c * 255 / peak) for c in color)
+        return self._last_rgb
+
+    @property
+    def brightness(self):
+        value = max(self._color())
+        if value:
+            self._last_brightness = value
+        return value
+
+    async def async_turn_on(self, **kwargs):
+        rgb = kwargs.get("rgb_color", self.rgb_color)
+        brightness = kwargs.get("brightness", self.brightness or self._last_brightness)
+        await self.coordinator.command(
+            "zone_light", self.key, self.zone_key, True, rgb=rgb, brightness=brightness
+        )
+
+    async def async_turn_off(self, **kwargs):
+        _ = self.rgb_color, self.brightness
+        await self.coordinator.command("zone_light", self.key, self.zone_key, False)

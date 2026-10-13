@@ -8,10 +8,10 @@ import pytest
 pytest.importorskip("homeassistant")
 
 from homeassistant.components.light import ColorMode
-from custom_components.openrgb_plus.light import OpenRGBLight
+from custom_components.openrgb_plus.light import OpenRGBLight, OpenRGBZoneLight, async_setup_entry
 from custom_components.openrgb_plus.select import ProfileSelect
 from custom_components.openrgb_plus.switch import EffectSwitch
-from custom_components.openrgb_plus.sdk import Device, Mode, Snapshot
+from custom_components.openrgb_plus.sdk import Device, Mode, Snapshot, Zone
 
 
 def coordinator():
@@ -28,6 +28,44 @@ def coordinator():
         async_add_listener=Mock(),
         command=AsyncMock(),
     )
+
+
+@pytest.mark.asyncio
+async def test_zone_entity_uses_own_colors_and_parent_device():
+    c = coordinator()
+    dev = c.data.devices["ram"]
+    dev.colors = [(255, 0, 0), (0, 0, 128)]
+    dev.zones = [Zone(0, "A", 1, 0, key="a"), Zone(1, "B", 1, 1, key="b")]
+    light = OpenRGBZoneLight(c, "ram", "b")
+    assert light.name == "B" and light.available and light.is_on
+    assert light.rgb_color == (0, 0, 255) and light.brightness == 128
+    assert light.device_info["identifiers"] == OpenRGBLight(c, "ram").device_info["identifiers"]
+    await light.async_turn_off()
+    c.command.assert_awaited_with("zone_light", "ram", "b", False)
+    dev.colors[1] = (0, 0, 0)
+    await light.async_turn_on()
+    c.command.assert_awaited_with("zone_light", "ram", "b", True, rgb=(0, 0, 255), brightness=128)
+    dev.zones.pop()
+    assert not light.available
+
+
+@pytest.mark.asyncio
+async def test_zone_discovery_skips_empty_and_adds_new_populated_zones():
+    c = coordinator()
+    c.entry.runtime_data = c
+    c.entry.async_on_unload = Mock()
+    dev = c.data.devices["ram"]
+    dev.zones = [Zone(0, "A", 1, 0, key="a"), Zone(1, "Empty", 0, 1, key="empty")]
+    add = Mock()
+    await async_setup_entry(None, c.entry, add)
+    assert sum(len(call.args[0]) for call in add.call_args_list) == 2  # Whole device + A.
+    callback = c.async_add_listener.call_args.args[0]
+    callback()
+    assert add.call_count == 2
+    dev.zones[1].led_count = 1
+    dev.colors.append((0, 255, 0))
+    callback()
+    assert add.call_count == 3
 
 
 @pytest.mark.asyncio
