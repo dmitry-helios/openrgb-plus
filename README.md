@@ -21,12 +21,15 @@ Disable the built-in OpenRGB integration if it is also controlling these devices
 | --- | --- |
 | Light for each controller | On/off, RGB color, brightness where the active mode supports it, and the hardware modes advertised by that controller |
 | Light for each populated zone | Independent RGB color, software brightness, and on/off, grouped under the same physical device |
+| Light for each valid custom segment | Controls a configured subsection of a zone, using its OpenRGB segment name |
 | Profile selector on the server | Loads an existing saved OpenRGB profile and reapplies its controller modes and LED colors |
 | Optional Effects switches | Starts/stops effects already configured in the OpenRGB Effects plugin |
 
 Both identically named RAM sticks get distinct IDs using their hardware metadata/location. If devices expose identical metadata, an occurrence suffix distinguishes them; their assignment can change when identical devices are reordered. You can rename entities in Home Assistant.
 
 ### Zone lights (0.2.0)
+
+Version 0.2.1 also discovers **custom segments** within zones. Each valid, non-empty segment becomes another light using its OpenRGB name. Segment commands update the parent zone from a freshly read color buffer, replacing only the segment's LED range. Parent-zone and whole-device lights remain available. Overlapping segments share physical LEDs, so changes to the overlap are reflected in both lights. Segments outside the physical color range are not exposed, including virtual subdivisions of a single non-addressable RGB output. Renaming a segment changes its entity identity; changing its range keeps it. Other RGB clients can race with a segment's read/modify/write, so avoid competing writers for predictable results.
 
 Populated OpenRGB zones are discovered automatically as additional HA lights, named after the zones shown in OpenRGB. Existing whole-device entity IDs stay unchanged. Zone lights support dashboards, groups, scenes, and standard `light.turn_on`/`light.turn_off` actions. Whole-device commands and profiles still affect all zones.
 

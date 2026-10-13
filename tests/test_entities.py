@@ -11,7 +11,7 @@ from homeassistant.components.light import ColorMode
 from custom_components.openrgb_plus.light import OpenRGBLight, OpenRGBZoneLight, async_setup_entry
 from custom_components.openrgb_plus.select import ProfileSelect
 from custom_components.openrgb_plus.switch import EffectSwitch
-from custom_components.openrgb_plus.sdk import Device, Mode, Snapshot, Zone
+from custom_components.openrgb_plus.sdk import Device, Mode, Snapshot, Zone, Segment
 
 
 def coordinator():
@@ -66,6 +66,37 @@ async def test_zone_discovery_skips_empty_and_adds_new_populated_zones():
     dev.colors.append((0, 255, 0))
     callback()
     assert add.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_segment_entity_state_discovery_and_removal():
+    c = coordinator()
+    c.entry.runtime_data = c
+    c.entry.async_on_unload = Mock()
+    dev = c.data.devices["ram"]
+    dev.colors = [(255, 0, 0), (0, 0, 128), (0, 0, 128)]
+    zone = Zone(
+        0,
+        "Header",
+        3,
+        0,
+        key="header",
+        segments=[Segment("Section", 1, 2, "section"), Segment("Invalid", 3, 10, "invalid")],
+    )
+    dev.zones = [zone]
+    add = Mock()
+    await async_setup_entry(None, c.entry, add)
+    entities = [entity for call in add.call_args_list for entity in call.args[0]]
+    assert len(entities) == 3  # Device, zone, valid segment.
+    light = next(entity for entity in entities if getattr(entity, "segment_key", None) == "section")
+    assert light.name == "Section" and light.available
+    assert light.rgb_color == (0, 0, 255) and light.brightness == 128
+    await light.async_turn_on(brightness=64)
+    c.command.assert_awaited_with(
+        "zone_light", "ram", "header", True, rgb=(0, 0, 255), brightness=64, segment_key="section"
+    )
+    zone.segments.clear()
+    assert not light.available
 
 
 @pytest.mark.asyncio

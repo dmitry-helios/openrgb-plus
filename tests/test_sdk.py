@@ -153,7 +153,9 @@ async def test_effect_change_respects_explicit_overrides_and_generated_colors(
     assert client.mode.await_args.args[2].colors == expected
 
 
-def fixture(protocol=5, location="RAM slot 1", device_type=999, zone_layout=None):
+def fixture(
+    protocol=5, location="RAM slot 1", device_type=999, zone_layout=None, segment_layout=None
+):
     mode = sdk.Mode("Direct", 7, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, [])
     raw = struct.pack("<I", device_type)
     raw += b"".join(
@@ -167,9 +169,12 @@ def fixture(protocol=5, location="RAM slot 1", device_type=999, zone_layout=None
         color_count += min(count, 1) if flags & 1 else count
         raw += sdk.string(name) + struct.pack("<4IH", 999, 0, 200, count, 0)
         if protocol >= 4:
-            raw += struct.pack("<H", 1) + sdk.string("Segment") + struct.pack("<3I", 999, 0, count)
-            if protocol >= 6:
-                raw += struct.pack("<HI", 0, 0)
+            segments = segment_layout if segment_layout is not None else [("Segment", 0, count)]
+            raw += struct.pack("<H", len(segments))
+            for segment_name, start, length in segments:
+                raw += sdk.string(segment_name) + struct.pack("<3I", 999, start, length)
+                if protocol >= 6:
+                    raw += struct.pack("<HI", 0, 0)
         if protocol >= 5:
             raw += struct.pack("<I", flags)
         if protocol >= 6:
@@ -183,6 +188,65 @@ def fixture(protocol=5, location="RAM slot 1", device_type=999, zone_layout=None
     if protocol >= 6:
         raw += sdk.string("Display device") + struct.pack("<I", 3) + b"{}\0"
     return sdk.block(raw)
+
+
+@pytest.mark.parametrize("protocol", [4, 5, 6])
+def test_custom_segments_parse_relative_ranges_and_duplicate_names(protocol):
+    dev = sdk.parse_device(
+        fixture(
+            protocol,
+            zone_layout=[("Header", 8, 0)],
+            segment_layout=[("Section", 0, 2), ("Section", 2, 6)],
+        ),
+        0,
+        protocol,
+    )
+    segments = dev.zones[0].segments
+    assert [(s.name, s.start, s.count) for s in segments] == [("Section", 0, 2), ("Section", 2, 6)]
+    assert segments[0].key != segments[1].key
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("on", [True, False])
+@pytest.mark.parametrize("active_mode", [0, 0xFFFFFFFF])
+async def test_segment_command_preserves_other_segments_and_uses_zone_relative_offset(on, active_mode):
+    dev = sdk.parse_device(
+        fixture(
+            6, zone_layout=[("First", 2, 0), ("Second", 5, 0)], segment_layout=[("Section", 1, 2)]
+        ),
+        99,
+        6,
+    )
+    dev.colors = [(i, 20, 30) for i in range(7)]
+    original = list(dev.colors)
+    zone = dev.zones[1]
+    zone.active_mode = active_mode
+    c = sdk.Client("unused")
+    c.read_devices = AsyncMock(return_value={dev.key: dev})
+    c.command = AsyncMock()
+    await c.zone_light(dev.key, zone.key, on, (255, 0, 0), 128, segment_key=zone.segments[0].key)
+    expected = original[2:]
+    expected[1:3] = [(128, 0, 0) if on else (0, 0, 0)] * 2
+    c.command.assert_awaited_once_with(
+        1051, 99, sdk.block(struct.pack("<I", 1) + sdk.pack_colors(expected))
+    )
+    assert dev.colors == original
+    zone.segments[0].count = 100
+    c.command.reset_mock()
+    with pytest.raises(ValueError, match="physical zone LED range"):
+        await c.zone_light(dev.key, zone.key, True, segment_key=zone.segments[0].key)
+    c.command.assert_not_awaited()
+
+
+def test_zone_mode_inheritance_and_explicit_override():
+    dev = sdk.parse_device(fixture(6), 99, 6)
+    zone = dev.zones[0]
+    zone.active_mode = 0xFFFFFFFF
+    assert dev.zone_mode(zone) is dev.mode
+    zone.active_mode = 0
+    assert dev.zone_mode(zone) is zone.modes[0]
+    zone.active_mode = 999
+    assert dev.zone_mode(zone) is None
 
 
 @pytest.mark.parametrize("protocol", [3, 4, 5, 6])

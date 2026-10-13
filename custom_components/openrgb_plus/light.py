@@ -21,6 +21,15 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 if zone.color_count and identity not in known:
                     known.add(identity)
                     entities.append(OpenRGBZoneLight(coordinator, key, zone.key))
+                for segment in zone.segments:
+                    identity = (key, zone.key, segment.key)
+                    if (
+                        segment.count > 0
+                        and segment.start + segment.count <= zone.color_count
+                        and identity not in known
+                    ):
+                        known.add(identity)
+                        entities.append(OpenRGBZoneLight(coordinator, key, zone.key, segment.key))
         if entities:
             async_add_entities(entities)
 
@@ -150,9 +159,13 @@ class OpenRGBZoneLight(ServerEntity, LightEntity):
     _attr_supported_color_modes = {ColorMode.RGB}
     _attr_color_mode = ColorMode.RGB
 
-    def __init__(self, coordinator, key, zone_key):
-        super().__init__(coordinator, f"{key}_zone_{zone_key}")
+    def __init__(self, coordinator, key, zone_key, segment_key=None):
+        suffix = f"{key}_zone_{zone_key}"
+        if segment_key is not None:
+            suffix += f"_segment_{segment_key}"
+        super().__init__(coordinator, suffix)
         self.key, self.zone_key = key, zone_key
+        self.segment_key = segment_key
         self._last_rgb, self._last_brightness = (255, 255, 255), 255
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{coordinator.entry.entry_id}_{key}")}
@@ -171,28 +184,46 @@ class OpenRGBZoneLight(ServerEntity, LightEntity):
         )
 
     @property
+    def segment(self):
+        return (
+            next((s for s in self.zone.segments if s.key == self.segment_key), None)
+            if self.zone and self.segment_key is not None
+            else None
+        )
+
+    @property
     def name(self):
+        if self.segment_key is not None:
+            return self.segment.name if self.segment else "Segment"
         return self.zone.name if self.zone else "Zone"
 
     @property
     def available(self):
+        if self.segment_key is not None:
+            segment = self.segment
+            if (
+                segment is None
+                or segment.count <= 0
+                or segment.start + segment.count > self.zone.color_count
+            ):
+                return False
         return super().available and self.zone is not None and self.zone.color_count > 0
 
     def _color(self):
         if not self.zone:
             return (0, 0, 0)
-        colors = self.device.colors[self.zone.offset : self.zone.offset + self.zone.color_count]
+        offset, count = self.zone.offset, self.zone.color_count
+        if self.segment_key is not None:
+            if not self.segment:
+                return (0, 0, 0)
+            offset += self.segment.start
+            count = self.segment.count
+        colors = self.device.colors[offset : offset + count]
         return next((c for c in colors if any(c)), (0, 0, 0))
 
     @property
     def is_on(self):
-        mode = self.device.mode if self.device else None
-        if self.zone and self.zone.modes:
-            mode = (
-                self.zone.modes[self.zone.active_mode]
-                if 0 <= self.zone.active_mode < len(self.zone.modes)
-                else None
-            )
+        mode = self.device.zone_mode(self.zone) if self.device and self.zone else None
         return bool(any(self._color())) and not (mode and mode.name == "Off")
 
     @property
@@ -213,10 +244,12 @@ class OpenRGBZoneLight(ServerEntity, LightEntity):
     async def async_turn_on(self, **kwargs):
         rgb = kwargs.get("rgb_color", self.rgb_color)
         brightness = kwargs.get("brightness", self.brightness or self._last_brightness)
+        extra = {"segment_key": self.segment_key} if self.segment_key is not None else {}
         await self.coordinator.command(
-            "zone_light", self.key, self.zone_key, True, rgb=rgb, brightness=brightness
+            "zone_light", self.key, self.zone_key, True, rgb=rgb, brightness=brightness, **extra
         )
 
     async def async_turn_off(self, **kwargs):
         _ = self.rgb_color, self.brightness
-        await self.coordinator.command("zone_light", self.key, self.zone_key, False)
+        extra = {"segment_key": self.segment_key} if self.segment_key is not None else {}
+        await self.coordinator.command("zone_light", self.key, self.zone_key, False, **extra)

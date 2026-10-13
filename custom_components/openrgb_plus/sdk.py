@@ -119,6 +119,14 @@ def pack_colors(colors: list[tuple[int, int, int]]) -> bytes:
 
 
 @dataclass
+class Segment:
+    name: str
+    start: int
+    count: int
+    key: str
+
+
+@dataclass
 class Zone:
     index: int
     name: str
@@ -128,6 +136,7 @@ class Zone:
     modes: list[Mode] = field(default_factory=list)
     active_mode: int = 0
     key: str = ""
+    segments: list[Segment] = field(default_factory=list)
 
     @property
     def color_count(self) -> int:
@@ -155,6 +164,12 @@ class Device:
     def mode(self) -> Mode | None:
         return self.modes[self.active_mode] if 0 <= self.active_mode < len(self.modes) else None
 
+    def zone_mode(self, zone: Zone) -> Mode | None:
+        # Native v6 uses -1 (read as uint32) for the device-wide mode.
+        if not zone.modes or zone.active_mode in (-1, 0xFFFFFFFF):
+            return self.mode
+        return zone.modes[zone.active_mode] if 0 <= zone.active_mode < len(zone.modes) else None
+
 
 def parse_device(data: bytes, index: int, protocol: int) -> Device:
     r = read_block(data)
@@ -170,10 +185,19 @@ def parse_device(data: bytes, index: int, protocol: int) -> Device:
         r.take(12)  # Type, minimum, maximum.
         led_count = r.number()
         r.take(r.number("H"))  # Optional matrix.
+        segments = []
+        segment_occurrences: dict[str, int] = {}
         if protocol >= 4:
             for _ in range(r.number("H")):
-                r.string()
-                r.take(12)
+                segment_name = r.string()
+                r.number()  # Segment type.
+                start, count = r.number(), r.number()
+                segment_base = hashlib.sha256(segment_name.encode()).hexdigest()[:16]
+                segment_number = segment_occurrences.get(segment_base, 0)
+                segment_occurrences[segment_base] = segment_number + 1
+                segments.append(
+                    Segment(segment_name, start, count, f"{segment_base}_{segment_number}")
+                )
                 if protocol >= 6:
                     r.take(r.number("H"))
                     r.number()
@@ -197,6 +221,7 @@ def parse_device(data: bytes, index: int, protocol: int) -> Device:
             zone_modes,
             zone_active,
             f"{base}_{occurrence}",
+            segments,
         )
         zones.append(zone)
         offset += zone.color_count
@@ -414,17 +439,19 @@ class Client:
         await self.command(1050, dev.index, block(pack_colors(colors)))
 
     async def zone_light(
-        self, key: str, zone_key: str, on: bool, rgb=(255, 255, 255), brightness=255
+        self,
+        key: str,
+        zone_key: str,
+        on: bool,
+        rgb=(255, 255, 255),
+        brightness=255,
+        segment_key: str | None = None,
     ) -> None:
         dev = (await self.read_devices()).get(key)
         zone = next((z for z in dev.zones if z.key == zone_key), None) if dev else None
         if zone is None or not zone.color_count:
             raise ValueError("Zone is no longer connected or has no configured LEDs")
-        mode = (
-            (zone.modes[zone.active_mode] if 0 <= zone.active_mode < len(zone.modes) else None)
-            if zone.modes
-            else dev.mode
-        )
+        mode = dev.zone_mode(zone)
         if mode is None or mode.color_mode != 1 or not mode.flags & 32:
             raise ValueError(
                 "Select Direct or another per-LED color mode in OpenRGB or on the whole-device light before controlling this zone"
@@ -432,10 +459,23 @@ class Client:
         if len(rgb) != 3 or any(not 0 <= c <= 255 for c in rgb) or not 0 <= brightness <= 255:
             raise ValueError("RGB and brightness values must be between 0 and 255")
         color = tuple(round(c * brightness / 255) for c in rgb) if on else (0, 0, 0)
+        colors = [color] * zone.color_count
+        if segment_key is not None:
+            segment = next((s for s in zone.segments if s.key == segment_key), None)
+            if (
+                segment is None
+                or segment.count <= 0
+                or segment.start + segment.count > zone.color_count
+            ):
+                raise ValueError("Segment is missing or outside the physical zone LED range")
+            # The SDK has no segment-color packet. Update the parent zone using
+            # its freshly read colors, replacing only this segment's slice.
+            colors = list(dev.colors[zone.offset : zone.offset + zone.color_count])
+            colors[segment.start : segment.start + segment.count] = [color] * segment.count
         await self.command(
             1051,
             dev.index,
-            block(struct.pack("<I", zone.index) + pack_colors([color] * zone.color_count)),
+            block(struct.pack("<I", zone.index) + pack_colors(colors)),
         )
 
     async def light(self, key: str, on: bool, rgb=None, brightness=None, effect=None) -> None:

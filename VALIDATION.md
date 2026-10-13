@@ -20,3 +20,10 @@ See the Tests workflow for protocol and Home Assistant entity checks. The SDK te
 - Added tests for virtual-sized RGB outputs, empty zones, stable identity across resizing, zone-only command payloads, rejection of incompatible shared modes, and HA entity grouping/discovery.
 - Zone writes use the SDK zone-color packet; physical hardware may still couple outputs. Independent zone effect selection is not exposed.
 
+## Custom segments (0.2.1)
+
+- Custom segment names and zone-relative LED ranges are parsed from SDK v4–v6 descriptions.
+- Tests cover duplicate names, nonzero parent-zone offsets, preservation of colors outside the segment, invalid ranges, entity discovery and removal.
+- Verified independent color, brightness and off commands on two live custom segments. SDK reads confirmed all LEDs outside each target range stayed unchanged; original colors were restored and verified.
+- Handles native v6 zones that inherit the device mode through the unsigned -1 sentinel, covered by regression tests.
+
