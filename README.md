@@ -15,6 +15,8 @@ In OpenRGB, start the **SDK Server**, listening on `0.0.0.0` or the computer's L
 
 Disable the built-in OpenRGB integration if it is also controlling these devices, to avoid competing commands. OpenRGB Plus uses its own `openrgb_plus` domain and does not overwrite the built-in integration or migrate its entity IDs. Legacy Workaround can remain enabled: this client sends correctly sized protocol packets.
 
+If OpenRGB runs as a Windows service, check the service's SDK listening address as well as the desktop app's settings. They can use separate configurations; a service listening only on `127.0.0.1` cannot accept connections from another computer. After changing the service configuration, restart the OpenRGB service with administrator privileges. Version 0.2.2 includes the server address and an explicit timeout or connection-refused explanation in HA errors.
+
 ## Controls
 
 | Entity | What it controls |

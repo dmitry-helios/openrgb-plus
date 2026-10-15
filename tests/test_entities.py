@@ -1,6 +1,7 @@
 """Entity contracts against real Home Assistant classes (Linux CI)."""
 
 from types import SimpleNamespace
+import asyncio
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -12,6 +13,30 @@ from custom_components.openrgb_plus.light import OpenRGBLight, OpenRGBZoneLight,
 from custom_components.openrgb_plus.select import ProfileSelect
 from custom_components.openrgb_plus.switch import EffectSwitch
 from custom_components.openrgb_plus.sdk import Device, Mode, Snapshot, Zone, Segment
+from custom_components.openrgb_plus.coordinator import OpenRGBCoordinator, describe_error
+from homeassistant.helpers.update_coordinator import UpdateFailed
+
+
+@pytest.mark.parametrize("error", [TimeoutError(), ConnectionRefusedError(), ValueError()])
+def test_connection_errors_always_have_endpoint_and_reason(error):
+    client = SimpleNamespace(host="rgb.example", port=6742)
+    message = describe_error(client, error)
+    assert message.startswith("OpenRGB rgb.example:6742: ")
+    assert message.split(": ", 1)[1].strip()
+
+
+@pytest.mark.asyncio
+async def test_failed_poll_closes_connection_and_reports_timeout():
+    c = SimpleNamespace(
+        lock=asyncio.Lock(),
+        client=SimpleNamespace(host="rgb.example", port=6742, close=AsyncMock()),
+        _snapshot=AsyncMock(side_effect=TimeoutError()),
+        last_profile="Example",
+    )
+    with pytest.raises(UpdateFailed, match="rgb.example:6742: Timed out"):
+        await OpenRGBCoordinator._async_update_data(c)
+    c.client.close.assert_awaited_once()
+    assert c.last_profile is None
 
 
 def coordinator():

@@ -14,6 +14,17 @@ LOGGER = logging.getLogger(__name__)
 ERRORS = (OSError, ValueError, TimeoutError, asyncio.IncompleteReadError)
 
 
+def describe_error(client, err):
+    """Include the endpoint and a useful description even for empty exceptions."""
+    if isinstance(err, TimeoutError):
+        detail = "Timed out connecting to or waiting for the SDK server"
+    elif isinstance(err, ConnectionRefusedError):
+        detail = "Connection refused; check that the SDK server is listening on its LAN address"
+    else:
+        detail = str(err).strip() or type(err).__name__
+    return f"OpenRGB {client.host}:{client.port}: {detail}"
+
+
 class OpenRGBCoordinator(DataUpdateCoordinator):
     def __init__(self, hass, entry):
         super().__init__(
@@ -40,7 +51,7 @@ class OpenRGBCoordinator(DataUpdateCoordinator):
             except ERRORS as err:
                 self.last_profile = None
                 await self.client.close()
-                raise UpdateFailed(f"OpenRGB: {err}") from err
+                raise UpdateFailed(describe_error(self.client, err)) from err
             except asyncio.CancelledError:
                 await self.client.close()
                 raise
@@ -58,8 +69,9 @@ class OpenRGBCoordinator(DataUpdateCoordinator):
                 self.async_set_updated_data(await self._snapshot())
             except ERRORS as err:
                 await self.client.close()
-                self.async_set_update_error(UpdateFailed(str(err)))
-                raise HomeAssistantError(f"OpenRGB command failed: {err}") from err
+                message = describe_error(self.client, err)
+                self.async_set_update_error(UpdateFailed(message))
+                raise HomeAssistantError(message) from err
             except asyncio.CancelledError:
                 await self.client.close()
                 raise
